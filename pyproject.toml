@@ -1,0 +1,27 @@
+[project]
+name = "biglittle-moe"
+version = "0.2.0"
+description = "Two-tier heterogeneous MoE: GPU-resident big core + host-RAM streamed micro-experts"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.10"
+dependencies = [
+    "torch>=2.4",
+    "transformers>=4.45",
+    "accelerate>=0.30",
+    "datasets>=2.18",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/biglittle_moe"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

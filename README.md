@@ -1,33 +1,49 @@
-# BigLittle-MoE: Breaking the VRAM Wall with Hierarchical Multi-Big Core & Micro-Expert Streaming
+# BigLittle-MoE: Breaking the VRAM Wall with Hierarchical Big Core & Micro-Expert Streaming
 
 [![GitHub](https://img.shields.io/badge/GitHub-BigLittle--MoE-181717?style=flat&logo=github&logoColor=white)](https://github.com/aifeifei798/BigLittle-MoE)
 [![Hugging Face](https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-BigLittle--MoE-yellow?style=flat)](https://huggingface.co/aifeifei798/BigLittle-MoE)
-[![Framework](https://img.shields.io/badge/PyTorch-2.0+-ee4c2c.svg?style=flat&logo=pytorch&logoColor=white)](https://pytorch.org/)
+[![Framework](https://img.shields.io/badge/PyTorch-2.4+-ee4c2c.svg?style=flat&logo=pytorch&logoColor=white)](https://pytorch.org/)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg?style=flat)](https://opensource.org/licenses/Apache-2.0)
 
----
-
-## 1. Executive Summary & TL;DR
-
-Deploying frontier-scale Mixture-of-Experts (MoE) models locally has long been hindered by the **VRAM capacity wall**. Conventional offloading strategies often fail due to catastrophic PCIe latency when swapping massive multi-gigabyte expert weights.
-
-**BigLittle-MoE** breaks this paradigm by implementing an asymmetric **Two-Tier Heterogeneous MoE** architecture inspired by modern CPU big.LITTLE systems:
-
-1. **Tier 1 (GPU-Resident Big Core):** High-capacity generalist FFN backbone (native Qwen dense MLPs) permanently pinned in GPU VRAM to anchor syntax, logical reasoning, and language fluency with **zero PCIe transfer penalty**.
-2. **Tier 2 (Host RAM Micro-Expert Pool):** Hundreds of modular, fine-grained micro-experts (Rank-16 LoRA modules, ~64 KB each) stored in cost-effective Host RAM (DDR4/DDR5) and streamed dynamically via asynchronous page-locked PCIe DMA.
-3. **Top-8 Collaborative Routing:** Instead of brittle single-expert selection, each layer dynamically dispatches and weights the **Top-8 highest-scoring micro-experts** per token, synthesizing domain expertise (Code, Math, Writing) concurrently on the fly.
-
-### Key Empirical Milestones
-* **896 Real Trained Experts in 56 MB:** Extended `Qwen/Qwen3-0.6B` to host **896 dynamic LoRA micro-experts** (32 per layer across 28 layers), consuming only **56.00 MB** of Host RAM (~64 KB per expert) and **1.75 MB** of added VRAM.
-* **Top-8 Real-Time Streaming (21–23 tokens/s):** Executes **224 PCIe DMA micro-transfers per token** ($28 \text{ layers} \times 8 \text{ experts}$) while sustaining a fluid **20.8 – 22.6 tokens/s** generation throughput on a consumer workstation.
-* **Rigorous ChatML & Chain-of-Thought (<think>):** Native integration with standard ChatML protocols, featuring autonomous `<think>...</think>` internal reasoning loops, zero conversational drifting, and perfect algebraic resolution.
-* **Live Neural Telemetry:** Real-time console inspection tracing per-token expert activation distribution across domains in real time.
+> All numbers below were measured on an **RTX 5090 D** with the refactored
+> codebase (`v0.2.0`). Where a claim could not be reproduced it is called out
+> explicitly rather than quietly dropped.
 
 ---
 
-## 2. Architecture: Two-Tier Decoupled Memory Hierarchy
+## 1. Executive Summary
 
-Rather than treating all experts as bulky, homogeneous blocks, BigLittle-MoE physically decouples the model across memory boundaries:
+Deploying frontier-scale Mixture-of-Experts (MoE) models locally runs into the
+**VRAM capacity wall**. Conventional offloading fails because swapping
+multi-gigabyte expert weights over PCIe is far too slow to hide behind compute.
+
+**BigLittle-MoE** borrows the asymmetric two-tier idea from CPU big.LITTLE
+designs:
+
+1. **Tier 1 -- GPU-resident big core.** The pretrained dense Qwen MLP, pinned in
+   VRAM, anchoring syntax, reasoning and fluency at zero transfer cost.
+2. **Tier 2 -- host-RAM micro-expert pool.** 896 rank-16 LoRA micro-experts
+   (~64 KB each) living in page-locked DDR, streamed on demand.
+3. **Top-8 collaborative routing.** Each layer dispatches the top-8
+   micro-experts per token and blends them with a normalised weight.
+
+### Measured results
+
+| Metric | Value |
+| :--- | :--- |
+| Trained micro-experts | **896** (32 x 28 layers), all with non-zero weight |
+| Host RAM pool (bf16) | **56.00 MB** (~64 KB / expert) |
+| Checkpoint on disk | 58.30 MB |
+| Added VRAM over baseline | **1.75 MB** (router heads only) |
+| Top-8 throughput | **22.4 tokens/s** mean across 3 domains |
+| Top-1 throughput | 36.5 tokens/s mean |
+| Training time | **8.4 min** for 8,000 samples / 500 optimizer steps |
+| Training throughput | 15.8 samples/s |
+| Per-expert stream latency | 0.214 ms (p50 0.209, p95 0.238) |
+
+---
+
+## 2. Architecture
 
 ```text
                   ┌────────────────────────────────────────────────────────┐
@@ -35,230 +51,242 @@ Rather than treating all experts as bulky, homogeneous blocks, BigLittle-MoE phy
                   │  ┌──────────────────────────────────────────────────┐  │
                   │  │          Attention Layer + LayerNorm             │  │
                   │  ├──────────────────────────────────────────────────┤  │
-                  │  │   Tier-1: Big Core (Pinned in GPU VRAM)          │  │
-                  │  │   [Pretrained Native Qwen FFN Backbone]          │  │ <--- High-capacity Dense Backbone
-                  │  ├──────────────────────────────────────────────────┤  │      Zero PCIe latency
-                  │  │   Router Head (Per-Layer Gating Mechanism)       │  │
+                  │  │   Tier-1: Big Core (pinned in VRAM)              │  │
+                  │  │   [Pretrained Qwen dense FFN]                    │  │  Zero PCIe cost
+                  │  ├──────────────────────────────────────────────────┤  │
+                  │  │   Router Head (per-layer gating)                 │  │
                   │  └──────────┬──────────────────────────┬────────────┘  │
                   └─────────────┼──────────────────────────┼───────────────┘
                                 │                          │
-                  Intra-VRAM    │                          │ Non-blocking DMA Transfer
-                  Co-execution  ▼                          ▼ (Top-8 Streamed Concurrently)
+                  Intra-VRAM    │                          │  async DMA
+                  co-execution  ▼                          ▼  (Top-8 in flight)
                         ┌──────────────┐          ┌────────────────────────────────────────┐
                         │ Dense Output │          │            Host System RAM             │
                         └──────┬───────┘          │  ┌────────┐ ┌────────┐     ┌────────┐  │
-                               │                  │  │LoRA  01│ │LoRA  02│ ... │LoRA 896│  │ <--- 896 modular
-                               │                  │  └────────┘ └────────┘     └────────┘  │      micro-experts
-                               ▼                  └────────────────────────────────────────┘      in 56 MB DDR5
-                    [ Final Layer Output ]
+                                               │  │LoRA  01│ │LoRA  02│ ... │LoRA 896│  │
+                               │                  │  └────────┘ └────────┘     └────────┘  │
+                               ▼                  └────────────────────────────────────────┘
+                     [ Final Layer Output ]
 ```
 
-### Mathematical Formulation (Top-8 Dynamic Routing)
+### Formulation
 
-Given input activation tensor $\mathbf{x}$, the forward pass blends the dense foundational backbone with a normalized, weighted ensemble of the Top-8 micro-experts:
+$$\mathbf{y} = \text{FFN}^{\text{Big}}(\mathbf{x}) + \gamma \sum_{i \in \text{Top-}8} \omega_i \cdot \text{Expert}_{i}^{\text{Little}}(\mathbf{x})$$
 
-$$
-\mathbf{y} = \text{FFN}^{\text{Big}}(\mathbf{x}) + \gamma \cdot \sum_{i \in \text{Top-}8} \omega_i \cdot \text{Expert}_{i}^{\text{Little}}(\mathbf{x})
-$$
-
-Where:
-* $\text{FFN}^{\text{Big}}(\mathbf{x})$ is the permanently GPU-resident base MLP.
-* $\omega_i = \text{Softmax}(\text{Top-}8(\mathbf{W}_{\text{router}} \cdot \mathbf{x}_{[-1, :]})_i)$ is the normalized gating weight for expert $i$.
-* $\text{Expert}_{i}^{\text{Little}}(\mathbf{x}) = \mathbf{W}_B^{(i)} \mathbf{W}_A^{(i)} \mathbf{x} \cdot \frac{\alpha}{r}$ is the Rank-16 LoRA micro-expert transferred over PCIe via non-blocking DMA.
-* $\gamma = 0.3$ is the residual blending coefficient balancing foundational grammatical coherence with modular domain specialization.
+* $\omega_i = \text{Softmax}(\text{Top-}8(W_{\text{router}} x_{[-1,:]})_i)$
+* $\text{Expert}_i(\mathbf{x}) = W_B^{(i)} W_A^{(i)} \mathbf{x} \cdot \frac{\alpha}{r}$
+* $\gamma = 0.3$
 
 ---
 
-## 3. High-Throughput Domain-Supervised Training
+## 3. Routing: what the previous version got wrong
 
-We curated **8,000 domain-aligned instruction pairs** across three distinct clusters:
-* **Cluster 0 (Code & Algorithms, Experts #00–#07):** 2,000 samples from Python Code Instructions (`iamtarun/python_code_instructions_18k_alpaca`).
-* **Cluster 1 (Math & Reasoning, Experts #08–#15):** 2,000 samples from GSM8K Chain-of-Thought (`openai/gsm8k`).
-* **Cluster 2 (General Writing & Prose, Experts #16–#31):** 4,000 samples from No-Robots (`HuggingFaceH4/no_robots`).
+An earlier revision hard-wired expert selection during training:
 
-### Training Metrics (NVIDIA GeForce RTX 5090 D)
-* **Precision:** Native `bfloat16`
-* **Sequence Length:** 512 tokens
-* **Effective Batch Size:** 16 (Micro-batch 4 with Gradient Accumulation 4)
-* **Optimization:** AdamW ($lr = 1\times 10^{-3}$, weight decay $0.01$)
-* **Trainable Parameters:** 30.28 M (~56 MB, base model frozen)
-* **Throughput:** **43.2 samples/s (>22,000 tokens/s)**, converging in **3.12 minutes**.
-
----
-
-## 4. Empirical Evaluation: Multi-Expert Routing & Chat Telemetry
-
-In interactive streaming inference, BigLittle-MoE dynamically logs real-time expert allocations across all 28 layers.
-
-### Test 1: Algorithmic Implementation (Bubble Sort with Early Exit)
-* **User Prompt:** `"Write bubble sort in Python."`
-* **Throughput:** **20.8 tokens/s** (600 tokens generated)
-* **Output Extract:** The model generates internal `<think>` planning followed by an optimized bubble sort with a boolean `swapped` flag:
 ```python
-def bubble_sort(arr):
-    n = len(arr)
-    for i in range(n - 1):
-        swapped = False
-        for j in range(0, n - i - 1):
-            if arr[j] > arr[j + 1]:
-                arr[j], arr[j + 1] = arr[j + 1], arr[j]
-                swapped = True
-        if not swapped:
-            break
+if domain == 0:      expert = lora_pool[0]     # Code
+elif domain == 1:    expert = lora_pool[8]     # Math
+else:                expert = lora_pool[16]    # Writing
 ```
 
----
+Only **3 of 32** experts per layer ever received gradient, and because `lora_B`
+is zero-initialised the other 29 produced *exactly zero* forever. Top-8 routing
+therefore bought nothing over Top-1, and the "896 trained experts" headline was
+really 84.
 
-### Test 2: Mathematical Reasoning (Chicken-and-Rabbit Algebra)
-* **User Prompt:** `"There are 35 heads and 94 feet in total. How many chickens and rabbits are there?"`
-* **Throughput:** **21.3 tokens/s** (536 tokens generated)
-* **Reasoning Trace & Final Output:**
-```text
-<think>
-Let chicken count be x, rabbit count be y.
-Equation 1: x + y = 35
-Equation 2: 2x + 4y = 94
-Substitute y = 35 - x: 2x + 4(35 - x) = 94 -> 140 - 2x = 94 -> 2x = 46 -> x = 23 (chickens)
-Then y = 35 - 23 = 12 (rabbits).
-Verify: 23*2 + 12*4 = 46 + 48 = 94. Correct.
-</think>
+The current implementation fixes this:
 
-Chickens: 23, Rabbits: 12.
+* **Dense training forward.** Every expert is evaluated for every token with a
+  differentiable softmax gate, so all 32 experts per layer receive gradient.
+  Verified by `tests/test_modules.py::test_every_expert_receives_gradient` and by
+  the post-training norm report (`dead=0/32` on sampled layers).
+* **Domain supervision without index hard-coding.** The routing target is a
+  uniform distribution over the sample's 8-expert cluster, applied as a KL term.
+* **Load balancing.** A Switch-Transformer auxiliary loss discourages collapse
+  onto a single expert within a cluster.
+* **Matched formats.** Training now renders text with the same ChatML template
+  used at inference, and masks prompt tokens to `-100` so loss covers the
+  response only.
 
-Step-by-Step Explanation:
-1. Let the number of chickens be x and rabbits be y.
-2. System of equations:
-   - x + y = 35
-   - 2x + 4y = 94
-3. Solving gives x = 23, y = 12. Verified against constraints.
-```
-
----
-
-### Test 3: Atmospheric Poetry & Creative Prose
-* **User Prompt:** `"Write a short poem about missing home while standing by a rainy window at night."`
-* **Throughput:** **21.2 tokens/s** (354 tokens generated, natural `<|im_end|>` termination)
-* **Output:**
-```text
-**Shadows in Rain**  
-
-I stand where silence hums,  
-A lone sentinel’s breath—  
-Raindrops whisper secrets to the sky,  
-And I’m lost in echoes of my past.  
-
-No trace of daylight’s gentle touch,  
-Yet the world seems distant now.  
-Ghostly whispers linger,  
-As if my soul is still unspoken.  
-
-For home, though far from sight,  
-Still waits in shadows deep.  
-My heart clings to the wind,  
-And dreams of you float above.
-```
-
----
-
-### Test 4: Live Telemetry Dashboard Breakdown
-During multi-turn generation, BigLittle-MoE accumulates global activation frequencies across all $28 \times 8 = 224$ active slots per token:
+Routing quality is now essentially perfect -- each domain activates its own
+cluster and nothing else:
 
 ```text
-──────────────────────────────────────────────────────────────────────
-📊 [Neural Activity Breakdown / Multi-Expert Allocation]:
-   💻 Code / Algorithms:      24.8% [████                ] (33,321 calls)
-   🧮 Math / Logic:           24.8% [████                ] (33,380 calls)
-   ✍️  General / Writing:      50.4% [██████████          ] (67,699 calls)
-──────────────────────────────────────────────────────────────────────
+   💻 Code /     99.8%   (code prompt)
+   🧮 Math /    100.0%   (math prompt)
+   ✍️ Writing / 100.0%   (writing prompt)
 ```
 
 ---
 
-## 5. Architectural Comparison Table
+## 4. Data & training
 
-| Architecture Profile | Tier-1 VRAM | Tier-2 RAM Pool | Active Micro-Experts | Added VRAM Delta | Generation Speed |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| **Qwen3-0.6B Baseline** | 1137.39 MB | 0 MB | 0 (Dense FFN) | 0 MB | ~22.0 tokens/s |
-| **Single Big + 896 LoRA (Top-1)** | 1139.14 MB | **56.00 MB** | 1 per layer (28 total) | **1.75 MB** | **22.5 - 35.1 tokens/s** |
-| **Single Big + 896 LoRA (Top-8 Ensemble)** | 1139.14 MB | **56.00 MB** | **8 per layer (224 total)** | **1.75 MB** | **20.8 - 22.6 tokens/s** |
-| **Traditional MoE (e.g., Mixtral-style)** | > 14.5 GB | 0 MB | 2 full MLPs | > 13 GB | Bottlenecked on 4GB VRAM |
+8,000 domain-aligned instruction pairs:
+
+| Cluster | Experts | Source | Samples |
+| :--- | :--- | :--- | :--- |
+| Code & Algorithms | #00-#07 | `iamtarun/python_code_instructions_18k_alpaca` | 2,000 |
+| Math & Reasoning | #08-#15 | `openai/gsm8k` (calculator annotations stripped) | 2,000 |
+| General Writing | #16-#31 | `HuggingFaceH4/no_robots` | 4,000 |
+
+Training config: bf16 compute with **fp32 master weights**, seq len 512,
+micro-batch 4 x grad-accum 4 (effective 16), AdamW `lr=1e-3`, `wd=0.01`,
+aux-loss weight 0.01, grad-norm clipping at 1.0.
+
+Loss curve from the shipped run:
+
+```text
+[step 025/500] lm 1.7135 | route 0.6419 | aux 1.4990 | 14.8 samples/s
+[step 250/500] lm 1.6535 | route 0.0716 | aux 1.5614 | 15.6 samples/s
+[step 500/500] lm 1.5656 | route 0.0452 | aux 1.5281 | 15.8 samples/s
+```
+
+> The `aux` value hovers near 1.5 rather than 1.0. That is expected here:
+> routing is *deliberately* domain-clustered, so a healthy router concentrates on
+> ~8 of 32 experts. The term guards against intra-cluster collapse; it is not a
+> global-uniformity score.
 
 ---
 
-## 6. Systems Deep Dive: Why PCIe Does Not Choke Top-8 Routing
+## 5. Evaluation
 
-A natural concern with offloading is whether transferring 8 experts per layer per token ($28 \times 8 = 224$ transfers/token) will saturate the PCIe bus. BigLittle-MoE avoids contention through three mechanisms:
+```bash
+python -m biglittle_moe.evaluate --top-k 8
+```
 
-1. **Ultra-Compact Rank-16 Payloads:**  
-   Each micro-expert consists solely of $\mathbf{W}_A \in \mathbb{R}^{16 \times 896}$ and $\mathbf{W}_B \in \mathbb{R}^{896 \times 16}$ in `bfloat16`.  
-   $$\text{Size} = (16 \times 896 + 896 \times 16) \times 2\text{ bytes} = 57,344\text{ bytes} \approx 56\text{ KB}$$
-2. **Page-Locked (Pinned) DMA Pipelines:**  
-   Expert tensors are allocated via `pin_memory()`. The GPU DMA engine accesses host memory directly over PCIe without CPU operating system intervention:
-   $$\text{Transfer Time per Expert} = \frac{56\text{ KB}}{26\text{ GB/s (PCIe 4.0)}} \approx 0.00215\text{ ms}$$
-   Transferring 8 micro-experts per layer takes **~0.017 ms**, well within the GPU layer compute window.
-3. **Dedicated CUDA Streams:**  
-   DMA transfers execute asynchronously on `self.transfer_stream` while attention and Tier-1 dense core computations proceed concurrently on the default stream.
+Measured (200 new tokens per prompt):
+
+| Domain | Top-8 | Top-1 | Latency (Top-8) |
+| :--- | --- | --- | --- |
+| Code | 21.25 tok/s | 33.34 tok/s | 9410 ms |
+| Math | 22.98 tok/s | 37.84 tok/s | 8703 ms |
+| Writing | 23.05 tok/s | 38.33 tok/s | 8677 ms |
+| **mean** | **22.43 tok/s** | 36.50 tok/s | |
+
+> **On the Top-8 headline.** The original README claimed Top-8 ran at 20.8-22.6
+> tok/s and implied a benefit over Top-1. Both halves were wrong: the original
+> throughputs were computed as `45 / elapsed` regardless of how many tokens were
+> actually produced, and Top-8 could not have beaten Top-1 because the extra 7
+> experts were zero. With honest counting, **Top-1 is genuinely faster than
+> Top-8** (36.5 vs 22.4 tok/s) -- routing cost grows linearly in k. Top-8 remains
+> the default because it is the setting that exercises collaborative routing, not
+> because it is faster. Whether the extra capacity is worth ~14 tok/s is a real
+> open question.
 
 ---
 
-## 7. Quickstart & Minimal Reproducible Pipeline
+## 6. Why PCIe does not choke
 
-### 1. Installation
+1. **Compact payloads.** Each expert is $W_A \in \mathbb{R}^{16 \times 1024}$ and
+   $W_B \in \mathbb{R}^{1024 \times 16}$ in bf16:
+   $$(16 \cdot 1024 + 1024 \cdot 16) \cdot 2 = 65{,}536 \text{ bytes} \approx 64 \text{ KB}$$
+   All 896 = 56.00 MB.
+2. **Pinned DMA.** Experts are allocated with `pin_memory()`, so the DMA engine
+   moves them without CPU involvement.
+3. **Batched stream + one sync.** The top-k copies are queued together on a
+   dedicated CUDA stream *while the big-core matmuls are still in flight* on the
+   default stream, then synchronised once. The earlier code issued a copy and an
+   immediate `wait_stream` per expert, which serialised the transfers and
+   destroyed the overlap. Buffers are also passed through `record_stream` to
+   stop the caching allocator recycling them early.
+
+Measured end-to-end stream latency in `benchmarks/toy_layer.py` (4096 hidden,
+2 big cores + 16 streamed SwiGLU experts):
+
+```text
+[+] Stream latency: mean 0.214 ms | p50 0.209 ms | p95 0.238 ms
+```
+
+---
+
+## 7. Quickstart
+
+Requires an NVIDIA GPU with ~4 GB free VRAM and Python 3.10+.
+
 ```bash
 git clone https://github.com/aifeifei798/BigLittle-MoE.git
 cd BigLittle-MoE
-pip install torch transformers accelerate datasets
+
+# uv (recommended)
+uv venv && uv pip install -e ".[dev]"
+
+# or plain pip
+pip install -e ".[dev]"
 ```
 
-*(Alternatively clone from Hugging Face)*:
+Then:
+
 ```bash
-git clone https://huggingface.co/aifeifei798/BigLittle-MoE
+python -m biglittle_moe.prepare      # download + assemble 8,000 samples
+python -m biglittle_moe.train        # train 896 experts (~8.5 min on a 5090 D)
+python -m biglittle_moe.chat         # interactive streaming chat
+python -m biglittle_moe.evaluate     # domain benchmark
 ```
 
-### 2. Prepare Domain Datasets
+The original top-level script names still work and forward into the package:
+
 ```bash
 python prepare_data.py
-```
-
-### 3. Train 896 Micro-Experts (~3 mins on RTX 5090 / 4090)
-```bash
 python train_mole.py
-```
-
-### 4. Interactive Streaming Chat (Top-8 Co-Activation)
-Run the real-time streaming terminal with live expert activity breakdown:
-```bash
 python chat_mole_8_stream_en.py
+python test_trained_mole_8.py
 ```
 
-* **Interactive Controls:**
-  * Type `clear` to reset conversational context.
-  * Type `exit` or `quit` to end the session.
-  * Press `Ctrl + C` during text generation to halt output safely without terminating the runtime.
+Benchmarks (no training, no language model):
+
+```bash
+python benchmarks/toy_layer.py --big-cores 2
+python benchmarks/qwen_plumbing.py --mode lora
+```
 
 ---
 
-## 8. Hardware & Edge-AI Compatibility
+## 8. Project layout
 
-| Target Platform | Memory Topology | BigLittle-MoE Feasibility | Expected Latency / Speed |
+```text
+src/biglittle_moe/
+  config.py      single source of truth: model id, rank, top-k, gamma, domains
+  experts.py     LoRAMicroExpert
+  modules.py     BigLittleMoEWrapper -- dense (train) and streaming (infer) paths
+  model.py       load / patch / checkpoint I/O
+  domains.py     expert -> domain mapping and telemetry rendering
+  data.py        corpus assembly + ChatML dataset with prompt masking
+  train.py       training loop with routing + auxiliary losses
+  generate.py    generation with accurate token accounting
+  chat.py        interactive terminal
+  evaluate.py    domain benchmark suite
+  prepare.py     data download CLI
+benchmarks/      toy_layer.py, qwen_plumbing.py
+tests/           21 unit tests
+```
+
+Configuration is centralised in `config.py`; `test_trained_mole.py` and
+`test_trained_mole_8.py` are now thin shims over one implementation with a
+`--top-k` flag, since they differed only in that value.
+
+---
+
+## 9. Hardware notes
+
+| Platform | Topology | Feasibility | Speed |
 | :--- | :--- | :--- | :--- |
-| **Consumer Desktop (RTX 4060 / 5090)** | Discrete GPU + PCIe + DDR5 | Pinned Host DMA (Top-8 Active) | **21 – 35 tokens/s** |
-| **Laptops with iGPU / 4 GB VRAM** | Discrete / Shared VRAM | Fits entirely in < 1.3 GB memory | **18 – 25 tokens/s** |
-| **Apple Silicon (M2 / M3 / M4)** | **Unified Memory Architecture (UMA)** | Zero-Copy pointer swap (Zero PCIe penalty) | **40 – 60+ tokens/s** |
-| **Snapdragon / Dimensity Flagship SoC** | **Mobile UMA LPDDR5X** | Zero-Copy NPU execution (< 500 MB INT4) | **50 – 80+ tokens/s** |
+| RTX 4060 / 5090 | Discrete GPU + PCIe | Pinned host DMA | 22 tok/s (Top-8) / 36 tok/s (Top-1) |
+| Laptops, 4 GB VRAM | Shared VRAM | Fits in < 1.3 GB | untested |
+| Apple Silicon (M2-M4) | Unified memory | Zero-copy pointer swap | untested |
 
-> **Note on Mobile Edge Deployment:** On mobile SoCs with Unified Memory (UMA), the PCIe transfer penalty drops to **zero**. The NPU accesses the 56 MB expert pool in-place via shared memory addresses, making BigLittle-MoE exceptionally well-suited for on-device, thermal-efficient AI.
+> The original table quoted 40-80 tok/s figures for Apple Silicon and mobile SoCs.
+> **Those were projections, never measurements** -- this project has not been
+> run on any of those platforms, and no such hardware was available. Treat them
+> as untested.
 
 ---
 
-## 9. Citation
-
-If you build upon BigLittle-MoE in your research or edge deployment pipelines, please cite:
+## 10. Citation
 
 ```bibtex
 @misc{biglittle_moe_2026,
   author = {aifeifei798 and Community Contributors},
-  title = {BigLittle-MoE: Breaking the VRAM Wall with Hierarchical Multi-Big Core and Micro-Expert Streaming},
+  title = {BigLittle-MoE: Breaking the VRAM Wall with Hierarchical Big Core and Micro-Expert Streaming},
   year = {2026},
   publisher = {GitHub and Hugging Face},
   howpublished = {\url{https://github.com/aifeifei798/BigLittle-MoE}}

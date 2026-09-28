@@ -1,0 +1,20 @@
+# Virtual environments
+.venv/
+venv/
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+build/
+dist/
+
+# Training artifacts
+*.pt
+*.jsonl
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
