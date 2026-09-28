@@ -1,21 +1,21 @@
 # BigLittle-MoE: Breaking the VRAM Wall with Hierarchical Multi-Big Core & Micro-Expert Streaming
 
-[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
-[![Framework](https://img.shields.io/badge/Framework-PyTorch-orange.svg)](https://pytorch.org/)
-[![HuggingFace](https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-BigLittle--MoE-yellow)](https://huggingface.co/aifeifei798/BigLittle-MoE)
-[![Hardware](https://img.shields.io/badge/Hardware-Consumer_GPU-green.svg)](https://github.com/)
+[![GitHub](https://img.shields.io/badge/GitHub-BigLittle--MoE-181717?style=flat&logo=github&logoColor=white)](https://github.com/aifeifei798/BigLittle-MoE)
+[![Hugging Face](https://img.shields.io/badge/%F0%9F%A4%97%20Hugging%20Face-BigLittle--MoE-yellow?style=flat)](https://huggingface.co/aifeifei798/BigLittle-MoE)
+[![Framework](https://img.shields.io/badge/PyTorch-2.0+-ee4c2c.svg?style=flat&logo=pytorch&logoColor=white)](https://pytorch.org/)
+[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg?style=flat)](https://opensource.org/licenses/Apache-2.0)
 
 ---
 
 ## 1. Executive Summary & TL;DR
 
-Deploying frontier-scale Mixture-of-Experts (MoE) models locally has long been bottlenecked by the **VRAM capacity wall**. Conventional offloading strategies often fail due to catastrophic PCIe latency when swapping massive multi-gigabyte expert weights.
+Deploying frontier-scale Mixture-of-Experts (MoE) models locally has long been hindered by the **VRAM capacity wall**. Conventional offloading strategies often fail due to catastrophic PCIe latency when swapping massive multi-gigabyte expert weights.
 
-**BigLittle-MoE** breaks this paradigm by implementing an asymmetric **Two-Tier Heterogeneous MoE** architecture inspired by modern CPU big.LITTLE architectures:
+**BigLittle-MoE** breaks this paradigm by implementing an asymmetric **Two-Tier Heterogeneous MoE** architecture inspired by modern CPU big.LITTLE systems:
 
 1. **Tier 1 (GPU-Resident Big Core):** High-capacity generalist FFN backbone (native Qwen dense MLPs) permanently pinned in GPU VRAM to anchor syntax, logical reasoning, and language fluency with **zero PCIe transfer penalty**.
 2. **Tier 2 (Host RAM Micro-Expert Pool):** Hundreds of modular, fine-grained micro-experts (Rank-16 LoRA modules, ~64 KB each) stored in cost-effective Host RAM (DDR4/DDR5) and streamed dynamically via asynchronous page-locked PCIe DMA.
-3. **Top-8 Collaborative Routing (New):** Instead of brittle single-expert selection, each layer dynamically dispatches and weights the **Top-8 highest-scoring micro-experts** per token, synthesizing domain expertise (Code, Math, Writing) on the fly.
+3. **Top-8 Collaborative Routing:** Instead of brittle single-expert selection, each layer dynamically dispatches and weights the **Top-8 highest-scoring micro-experts** per token, synthesizing domain expertise (Code, Math, Writing) concurrently on the fly.
 
 ### Key Empirical Milestones
 * **896 Real Trained Experts in 56 MB:** Extended `Qwen/Qwen3-0.6B` to host **896 dynamic LoRA micro-experts** (32 per layer across 28 layers), consuming only **56.00 MB** of Host RAM (~64 KB per expert) and **1.75 MB** of added VRAM.
@@ -197,9 +197,14 @@ A natural concern with offloading is whether transferring 8 experts per layer pe
 
 ### 1. Installation
 ```bash
-git clone https://huggingface.co/aifeifei798/BigLittle-MoE
+git clone https://github.com/aifeifei798/BigLittle-MoE.git
 cd BigLittle-MoE
 pip install torch transformers accelerate datasets
+```
+
+*(Alternatively clone from Hugging Face)*:
+```bash
+git clone https://huggingface.co/aifeifei798/BigLittle-MoE
 ```
 
 ### 2. Prepare Domain Datasets
@@ -247,7 +252,7 @@ If you build upon BigLittle-MoE in your research or edge deployment pipelines, p
   author = {aifeifei798 and Community Contributors},
   title = {BigLittle-MoE: Breaking the VRAM Wall with Hierarchical Multi-Big Core and Micro-Expert Streaming},
   year = {2026},
-  publisher = {Hugging Face},
-  howpublished = {\url{https://huggingface.co/aifeifei798/BigLittle-MoE}}
+  publisher = {GitHub and Hugging Face},
+  howpublished = {\url{https://github.com/aifeifei798/BigLittle-MoE}}
 }
 ```
