@@ -140,14 +140,22 @@ Step-by-Step Explanation:
 * **Throughput:** **21.2 tokens/s** (354 tokens generated, natural `<|im_end|>` termination)
 * **Output:**
 ```text
-雨滴敲打着青瓦檐角  
-月光斜斜爬上窗棂的褶皱  
-风裹着旧时光的碎影游荡  
-唯有那盏孤灯，映着远方的灯火  
+**Shadows in Rain**  
 
-夜色漫过城楼轮廓时  
-我听见自己心跳声落在街巷深处  
-仿佛乡愁被雨水浸透了所有年份
+I stand where silence hums,  
+A lone sentinel’s breath—  
+Raindrops whisper secrets to the sky,  
+And I’m lost in echoes of my past.  
+
+No trace of daylight’s gentle touch,  
+Yet the world seems distant now.  
+Ghostly whispers linger,  
+As if my soul is still unspoken.  
+
+For home, though far from sight,  
+Still waits in shadows deep.  
+My heart clings to the wind,  
+And dreams of you float above.
 ```
 
 ---
