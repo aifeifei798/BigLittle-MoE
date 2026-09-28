@@ -5,9 +5,9 @@
 [![Framework](https://img.shields.io/badge/PyTorch-2.4+-ee4c2c.svg?style=flat&logo=pytorch&logoColor=white)](https://pytorch.org/)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg?style=flat)](https://opensource.org/licenses/Apache-2.0)
 
-> All numbers below were measured on an **RTX 5090 D** with the refactored
-> codebase (`v0.2.0`). Where a claim could not be reproduced it is called out
-> explicitly rather than quietly dropped.
+> All numbers below were measured on an **RTX 5090 D** against the code at tag
+> `v1.0.1`. Where a claim could not be reproduced it is called out explicitly
+> rather than quietly dropped.
 
 ---
 

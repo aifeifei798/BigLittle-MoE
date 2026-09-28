@@ -1,6 +1,6 @@
 [project]
 name = "biglittle-moe"
-version = "0.2.0"
+version = "1.0.1"
 description = "Two-tier heterogeneous MoE: GPU-resident big core + host-RAM streamed micro-experts"
 readme = "README.md"
 license = { file = "LICENSE" }
